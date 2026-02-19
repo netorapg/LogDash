@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/netorapg/LogDash/internal/core/aggregator"
@@ -23,9 +24,16 @@ type Model struct {
 	err     error
 
 	// UI State
-	activeTab int // 0: Overview, 1: Top Messages, 2: Timeline, 3: Anomalies
+	activeTab int // 0: Overview, 1: Errors, 2: Warnings, etc
 	width     int
 	height    int
+
+	// Viewport para scroll
+	viewport viewport.Model
+	ready    bool // viewport está pronto
+
+	// Help screen
+	showHelp bool
 
 	// Mensagens de status
 	statusMsg string
@@ -71,28 +79,120 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+
+		viewportHeight := msg.Height - 9
+		if viewportHeight < 10 {
+			viewportHeight = 10
+		}
+
+		if !m.ready {
+			m.viewport = viewport.New(msg.Width, viewportHeight)
+			m.viewport.YPosition = 5
+			m.ready = true
+		} else {
+			m.viewport.Width = msg.Width
+			m.viewport.Height = viewportHeight
+		}
+
+		m.updateViewportContent()
 		return m, nil
 
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
+			// Não sair se estiver na help screen
+			if m.showHelp {
+				m.showHelp = false
+				return m, nil
+			}
 			return m, tea.Quit
+
+		case "?":
+			// Toggle help screen
+			m.showHelp = !m.showHelp
+			return m, nil
+
+		case "esc":
+			// Fechar help screen
+			if m.showHelp {
+				m.showHelp = false
+				return m, nil
+			}
 
 		case "tab":
 			// Próxima tab
-			m.activeTab = (m.activeTab + 1) % len(tabNames)
-			return m, nil
+			if !m.showHelp {
+				m.activeTab = (m.activeTab + 1) % len(tabNames)
+				m.updateViewportContent()
+				if m.ready {
+					m.viewport.GotoTop()
+				}
+				return m, nil
+			}
 
 		case "shift+tab":
 			// Tab anterior
-			m.activeTab = (m.activeTab - 1 + len(tabNames)) % len(tabNames)
+			if !m.showHelp {
+				m.activeTab = (m.activeTab - 1 + len(tabNames)) % len(tabNames)
+				m.updateViewportContent()
+				if m.ready {
+					m.viewport.GotoTop()
+				}
+				return m, nil
+			}
+
+		case "up", "k":
+			// Scroll up no viewport
+			if !m.showHelp && m.ready {
+				m.viewport.LineUp(1)
+			}
+			return m, nil
+
+		case "down", "j":
+			// Scroll down no viewport
+			if !m.showHelp && m.ready {
+				m.viewport.LineDown(1)
+			}
+			return m, nil
+
+		case "pageup", "ctrl+u":
+			// Page up no viewport
+			if !m.showHelp && m.ready {
+				m.viewport.ViewUp()
+			}
+			return m, nil
+
+		case "pagedown", "ctrl+d", " ":
+			// Page down no viewport
+			if !m.showHelp && m.ready {
+				m.viewport.ViewDown()
+			}
+			return m, nil
+
+		case "home", "g":
+			// Topo no viewport
+			if !m.showHelp && m.ready {
+				m.viewport.GotoTop()
+			}
+			return m, nil
+
+		case "end", "G":
+			// Final no viewport
+			if !m.showHelp && m.ready {
+				m.viewport.GotoBottom()
+			}
 			return m, nil
 
 		case "r":
 			// Refresh - reanalizar
-			m.loading = true
-			m.statusMsg = "Refreshing..."
-			return m, analyzeCmd(m.rootPath, m.opts)
+			if !m.showHelp {
+				m.loading = true
+				m.statusMsg = "Refreshing..."
+				if m.ready {
+					m.viewport.GotoTop()
+				}
+				return m, analyzeCmd(m.rootPath, m.opts)
+			}
 		}
 
 	case analysisResultMsg:
@@ -104,6 +204,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.statusMsg = "Analysis complete"
 		}
+		m.updateViewportContent()
 		return m, nil
 	}
 
@@ -124,37 +225,35 @@ func (m Model) View() string {
 		return "No data available. Press 'r' to refresh or 'q' to quit.\n"
 	}
 
-	// Header
-	header := m.renderHeader()
-
-	// Tabs
-	tabs := m.renderTabs()
-
-	// Content baseado na tab ativa
-	var content string
-	switch m.activeTab {
-	case tabOverview:
-		content = m.renderOverview()
-	case tabErrors:
-		content = m.renderErrors()
-	case tabWarnings:
-		content = m.renderWarnings()
-	case tabTopMessages:
-		content = m.renderTopMessages()
-	case tabTimeline:
-		content = m.renderTimeline()
-	case tabAnomalies:
-		content = m.renderAnomalies()
+	// Se help screen está ativa, mostrar apenas ela
+	if m.showHelp {
+		return m.renderHelp()
 	}
 
-	// Footer
+	// Header (fixo)
+	header := m.renderHeader()
+
+	// Tabs (fixas)
+	tabs := m.renderTabs()
+
+	// Footer (fixo)
 	footer := m.renderFooter()
+
+	// Montar interface: partes fixas + viewport scrollável
+	if !m.ready {
+		return lipgloss.JoinVertical(
+			lipgloss.Left,
+			header,
+			tabs,
+			footer,
+		)
+	}
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		header,
 		tabs,
-		content,
+		m.viewport.View(),
 		footer,
 	)
 }
@@ -280,16 +379,13 @@ func (m Model) renderErrors() string {
 		return successStyle.Render("✓ No errors found")
 	}
 
+	// Título fixo (não scrolla)
+	title := errorStyle.Render(fmt.Sprintf("❌ %d Error Messages", len(errors)))
+
+	// Conteúdo scrollável
 	var b strings.Builder
-	b.WriteString(errorStyle.Render(fmt.Sprintf("❌ %d Error Messages", len(errors))) + "\n\n")
 
 	for i, msg := range errors {
-		if i >= 20 { // Limitar a 20 para caber na tela
-			remaining := len(errors) - 20
-			b.WriteString(dimStyle.Render(fmt.Sprintf("\n   ... and %d more errors", remaining)))
-			break
-		}
-
 		icon := "💀"
 		if msg.Level == parser.LevelError {
 			icon = "❌"
@@ -308,7 +404,7 @@ func (m Model) renderErrors() string {
 		}
 	}
 
-	return b.String()
+	return title + "\n\n" + b.String()
 }
 
 func (m Model) renderWarnings() string {
@@ -330,16 +426,13 @@ func (m Model) renderWarnings() string {
 		return successStyle.Render("✓ No warnings found")
 	}
 
+	// Título fixo (não scrolla)
+	title := warningStyle.Render(fmt.Sprintf("⚠️  %d Warning Messages", len(warnings)))
+
+	// Conteúdo scrollável
 	var b strings.Builder
-	b.WriteString(warningStyle.Render(fmt.Sprintf("⚠️  %d Warning Messages", len(warnings))) + "\n\n")
 
 	for i, msg := range warnings {
-		if i >= 20 { // Limitar a 20 para caber na tela
-			remaining := len(warnings) - 20
-			b.WriteString(dimStyle.Render(fmt.Sprintf("\n   ... and %d more warnings", remaining)))
-			break
-		}
-
 		// Número, ícone e mensagem
 		b.WriteString(fmt.Sprintf("%2d. ⚠️  %s ", i+1, truncate(msg.Message, 60)))
 		b.WriteString(warningStyle.Render(fmt.Sprintf("(x%d)", msg.Count)))
@@ -353,7 +446,7 @@ func (m Model) renderWarnings() string {
 		}
 	}
 
-	return b.String()
+	return title + "\n\n" + b.String()
 }
 
 func (m Model) renderTopMessages() string {
@@ -366,11 +459,8 @@ func (m Model) renderTopMessages() string {
 	var b strings.Builder
 	b.WriteString(infoStyle.Render("Top Messages") + "\n\n")
 
+	// Renderizar TODAS as mensagens (scroll será aplicado depois)
 	for i, msg := range r.TopMessages {
-		if i >= 15 { // Limitar a 15 para caber na tela
-			break
-		}
-
 		icon := getLevelIcon(msg.Level)
 		style := getLevelStyle(msg.Level)
 
@@ -412,12 +502,8 @@ func (m Model) renderTimeline() string {
 		maxCount = 1
 	}
 
-	// Renderizar timeline
-	for i, point := range r.Timeline {
-		if i >= 20 { // Limitar a 20 pontos
-			break
-		}
-
+	// Renderizar TODA a timeline (scroll será aplicado depois)
+	for _, point := range r.Timeline {
 		// Timestamp
 		timestamp := point.Timestamp.Format("15:04")
 		b.WriteString(dimStyle.Render(timestamp + " "))
@@ -455,11 +541,8 @@ func (m Model) renderAnomalies() string {
 	var b strings.Builder
 	b.WriteString(warningStyle.Render(fmt.Sprintf("⚠️  %d Anomalies Detected", len(r.Anomalies))) + "\n\n")
 
+	// Renderizar TODAS as anomalias (scroll será aplicado depois)
 	for i, anomaly := range r.Anomalies {
-		if i >= 10 {
-			break
-		}
-
 		// Severity icon
 		icon := "ℹ️"
 		style := infoStyle
@@ -471,7 +554,7 @@ func (m Model) renderAnomalies() string {
 			style = warningStyle
 		}
 
-		b.WriteString(fmt.Sprintf("%s ", icon))
+		b.WriteString(fmt.Sprintf("%d. %s ", i+1, icon))
 		b.WriteString(style.Render(fmt.Sprintf("[%s]", anomaly.Type)))
 		b.WriteString(fmt.Sprintf(" %s\n", anomaly.Description))
 		b.WriteString(dimStyle.Render(fmt.Sprintf("   Severity: %.2f", anomaly.Severity)))
@@ -487,7 +570,9 @@ func (m Model) renderAnomalies() string {
 func (m Model) renderFooter() string {
 	helpItems := []string{
 		dimStyle.Render("tab/shift+tab: navigate"),
+		dimStyle.Render("↑↓/j/k: scroll"),
 		dimStyle.Render("r: refresh"),
+		dimStyle.Render("?: help"),
 		dimStyle.Render("q: quit"),
 	}
 
@@ -508,6 +593,63 @@ func (m Model) renderLoading() string {
 
 func (m Model) renderError() string {
 	return errorStyle.Render(fmt.Sprintf("\n\n  ❌ Error: %v\n\n  Press 'r' to retry or 'q' to quit.\n\n", m.err))
+}
+
+// renderHelp renderiza a tela de ajuda
+func (m Model) renderHelp() string {
+	helpStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#7D56F4")).
+		Padding(1, 2).
+		Width(m.width - 4)
+
+	content := strings.Builder{}
+
+	content.WriteString(titleStyle.Render("LogDash TUI - Help") + "\n\n")
+
+	// Navigation
+	content.WriteString(successStyle.Render("Navigation:") + "\n")
+	content.WriteString("  Tab / Shift+Tab    Switch between tabs\n")
+	content.WriteString("  ↑ / k              Scroll up one line\n")
+	content.WriteString("  ↓ / j              Scroll down one line\n")
+	content.WriteString("  PageUp / Ctrl+U    Scroll up one page\n")
+	content.WriteString("  PageDown / Ctrl+D  Scroll down one page\n")
+	content.WriteString("  Home / g           Go to top\n")
+	content.WriteString("  End / G            Go to bottom\n\n")
+
+	// Actions
+	content.WriteString(successStyle.Render("Actions:") + "\n")
+	content.WriteString("  r                  Refresh (re-analyze logs)\n")
+	content.WriteString("  ?                  Toggle this help screen\n")
+	content.WriteString("  Esc                Close help screen\n")
+	content.WriteString("  q / Ctrl+C         Quit application\n\n")
+
+	// Tabs
+	content.WriteString(successStyle.Render("Available Tabs:") + "\n")
+	content.WriteString("  1. Overview        Summary and statistics\n")
+	content.WriteString("  2. Errors          All error messages (grouped)\n")
+	content.WriteString("  3. Warnings        All warning messages (grouped)\n")
+	content.WriteString("  4. Top Messages    Most frequent messages (all levels)\n")
+	content.WriteString("  5. Timeline        Temporal distribution graph\n")
+	content.WriteString("  6. Anomalies       Detected anomalies\n\n")
+
+	// Tips
+	content.WriteString(successStyle.Render("Tips:") + "\n")
+	content.WriteString("  • Use arrow keys or vim bindings (j/k) for navigation\n")
+	content.WriteString("  • Messages are grouped by content to avoid duplication\n")
+	content.WriteString("  • Counter (xN) shows occurrence count\n")
+	content.WriteString("  • Scroll indicators (▲▼) show more content available\n\n")
+
+	// Footer
+	content.WriteString(dimStyle.Render("Press '?' or 'Esc' to close this help screen"))
+
+	return lipgloss.Place(
+		m.width,
+		m.height,
+		lipgloss.Center,
+		lipgloss.Center,
+		helpStyle.Render(content.String()),
+	)
 }
 
 // Helper functions
@@ -549,6 +691,31 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// updateViewportContent atualiza o conteúdo do viewport baseado na tab ativa
+func (m *Model) updateViewportContent() {
+	if !m.ready || m.result == nil {
+		return
+	}
+
+	var content string
+	switch m.activeTab {
+	case tabOverview:
+		content = m.renderOverview()
+	case tabErrors:
+		content = m.renderErrors()
+	case tabWarnings:
+		content = m.renderWarnings()
+	case tabTopMessages:
+		content = m.renderTopMessages()
+	case tabTimeline:
+		content = m.renderTimeline()
+	case tabAnomalies:
+		content = m.renderAnomalies()
+	}
+
+	m.viewport.SetContent(content)
 }
 
 // Commands
