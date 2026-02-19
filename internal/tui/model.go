@@ -23,9 +23,15 @@ type Model struct {
 	err     error
 
 	// UI State
-	activeTab int // 0: Overview, 1: Top Messages, 2: Timeline, 3: Anomalies
+	activeTab int // 0: Overview, 1: Errors, 2: Warnings, etc
 	width     int
 	height    int
+
+	// Scroll state
+	scrollOffset int // Offset atual do scroll
+
+	// Help screen
+	showHelp bool
 
 	// Mensagens de status
 	statusMsg string
@@ -76,23 +82,96 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
+			// Não sair se estiver na help screen
+			if m.showHelp {
+				m.showHelp = false
+				return m, nil
+			}
 			return m, tea.Quit
+
+		case "?":
+			// Toggle help screen
+			m.showHelp = !m.showHelp
+			m.scrollOffset = 0 // Reset scroll ao abrir help
+			return m, nil
+
+		case "esc":
+			// Fechar help screen
+			if m.showHelp {
+				m.showHelp = false
+				return m, nil
+			}
 
 		case "tab":
 			// Próxima tab
-			m.activeTab = (m.activeTab + 1) % len(tabNames)
-			return m, nil
+			if !m.showHelp {
+				m.activeTab = (m.activeTab + 1) % len(tabNames)
+				m.scrollOffset = 0 // Reset scroll ao trocar tab
+				return m, nil
+			}
 
 		case "shift+tab":
 			// Tab anterior
-			m.activeTab = (m.activeTab - 1 + len(tabNames)) % len(tabNames)
+			if !m.showHelp {
+				m.activeTab = (m.activeTab - 1 + len(tabNames)) % len(tabNames)
+				m.scrollOffset = 0 // Reset scroll ao trocar tab
+				return m, nil
+			}
+
+		case "up", "k":
+			// Scroll up
+			if !m.showHelp && m.scrollOffset > 0 {
+				m.scrollOffset--
+			}
+			return m, nil
+
+		case "down", "j":
+			// Scroll down (limite será aplicado em applyScroll)
+			if !m.showHelp {
+				m.scrollOffset++
+			}
+			return m, nil
+
+		case "pageup", "ctrl+u":
+			// Scroll up uma página (10 linhas)
+			if !m.showHelp {
+				m.scrollOffset -= 10
+				if m.scrollOffset < 0 {
+					m.scrollOffset = 0
+				}
+			}
+			return m, nil
+
+		case "pagedown", "ctrl+d":
+			// Scroll down uma página (10 linhas)
+			if !m.showHelp {
+				m.scrollOffset += 10
+				// Limite será aplicado em applyScroll
+			}
+			return m, nil
+
+		case "home", "g":
+			// Início
+			if !m.showHelp {
+				m.scrollOffset = 0
+			}
+			return m, nil
+
+		case "end", "G":
+			// Fim (definir valor alto, será limitado em applyScroll)
+			if !m.showHelp {
+				m.scrollOffset = 9999
+			}
 			return m, nil
 
 		case "r":
 			// Refresh - reanalizar
-			m.loading = true
-			m.statusMsg = "Refreshing..."
-			return m, analyzeCmd(m.rootPath, m.opts)
+			if !m.showHelp {
+				m.loading = true
+				m.statusMsg = "Refreshing..."
+				m.scrollOffset = 0
+				return m, analyzeCmd(m.rootPath, m.opts)
+			}
 		}
 
 	case analysisResultMsg:
@@ -124,13 +203,18 @@ func (m Model) View() string {
 		return "No data available. Press 'r' to refresh or 'q' to quit.\n"
 	}
 
+	// Se help screen está ativa, mostrar apenas ela
+	if m.showHelp {
+		return m.renderHelp()
+	}
+
 	// Header
 	header := m.renderHeader()
 
 	// Tabs
 	tabs := m.renderTabs()
 
-	// Content baseado na tab ativa
+	// Content baseado na tab ativa (com scroll aplicado)
 	var content string
 	switch m.activeTab {
 	case tabOverview:
@@ -146,6 +230,9 @@ func (m Model) View() string {
 	case tabAnomalies:
 		content = m.renderAnomalies()
 	}
+
+	// Aplicar scroll ao conteúdo
+	content = m.applyScroll(content)
 
 	// Footer
 	footer := m.renderFooter()
@@ -283,13 +370,8 @@ func (m Model) renderErrors() string {
 	var b strings.Builder
 	b.WriteString(errorStyle.Render(fmt.Sprintf("❌ %d Error Messages", len(errors))) + "\n\n")
 
+	// Renderizar TODAS as mensagens (scroll será aplicado depois)
 	for i, msg := range errors {
-		if i >= 20 { // Limitar a 20 para caber na tela
-			remaining := len(errors) - 20
-			b.WriteString(dimStyle.Render(fmt.Sprintf("\n   ... and %d more errors", remaining)))
-			break
-		}
-
 		icon := "💀"
 		if msg.Level == parser.LevelError {
 			icon = "❌"
@@ -333,13 +415,8 @@ func (m Model) renderWarnings() string {
 	var b strings.Builder
 	b.WriteString(warningStyle.Render(fmt.Sprintf("⚠️  %d Warning Messages", len(warnings))) + "\n\n")
 
+	// Renderizar TODAS as mensagens (scroll será aplicado depois)
 	for i, msg := range warnings {
-		if i >= 20 { // Limitar a 20 para caber na tela
-			remaining := len(warnings) - 20
-			b.WriteString(dimStyle.Render(fmt.Sprintf("\n   ... and %d more warnings", remaining)))
-			break
-		}
-
 		// Número, ícone e mensagem
 		b.WriteString(fmt.Sprintf("%2d. ⚠️  %s ", i+1, truncate(msg.Message, 60)))
 		b.WriteString(warningStyle.Render(fmt.Sprintf("(x%d)", msg.Count)))
@@ -366,11 +443,8 @@ func (m Model) renderTopMessages() string {
 	var b strings.Builder
 	b.WriteString(infoStyle.Render("Top Messages") + "\n\n")
 
+	// Renderizar TODAS as mensagens (scroll será aplicado depois)
 	for i, msg := range r.TopMessages {
-		if i >= 15 { // Limitar a 15 para caber na tela
-			break
-		}
-
 		icon := getLevelIcon(msg.Level)
 		style := getLevelStyle(msg.Level)
 
@@ -412,12 +486,8 @@ func (m Model) renderTimeline() string {
 		maxCount = 1
 	}
 
-	// Renderizar timeline
-	for i, point := range r.Timeline {
-		if i >= 20 { // Limitar a 20 pontos
-			break
-		}
-
+	// Renderizar TODA a timeline (scroll será aplicado depois)
+	for _, point := range r.Timeline {
 		// Timestamp
 		timestamp := point.Timestamp.Format("15:04")
 		b.WriteString(dimStyle.Render(timestamp + " "))
@@ -455,11 +525,8 @@ func (m Model) renderAnomalies() string {
 	var b strings.Builder
 	b.WriteString(warningStyle.Render(fmt.Sprintf("⚠️  %d Anomalies Detected", len(r.Anomalies))) + "\n\n")
 
+	// Renderizar TODAS as anomalias (scroll será aplicado depois)
 	for i, anomaly := range r.Anomalies {
-		if i >= 10 {
-			break
-		}
-
 		// Severity icon
 		icon := "ℹ️"
 		style := infoStyle
@@ -471,7 +538,7 @@ func (m Model) renderAnomalies() string {
 			style = warningStyle
 		}
 
-		b.WriteString(fmt.Sprintf("%s ", icon))
+		b.WriteString(fmt.Sprintf("%d. %s ", i+1, icon))
 		b.WriteString(style.Render(fmt.Sprintf("[%s]", anomaly.Type)))
 		b.WriteString(fmt.Sprintf(" %s\n", anomaly.Description))
 		b.WriteString(dimStyle.Render(fmt.Sprintf("   Severity: %.2f", anomaly.Severity)))
@@ -487,7 +554,9 @@ func (m Model) renderAnomalies() string {
 func (m Model) renderFooter() string {
 	helpItems := []string{
 		dimStyle.Render("tab/shift+tab: navigate"),
+		dimStyle.Render("↑↓/j/k: scroll"),
 		dimStyle.Render("r: refresh"),
+		dimStyle.Render("?: help"),
 		dimStyle.Render("q: quit"),
 	}
 
@@ -508,6 +577,114 @@ func (m Model) renderLoading() string {
 
 func (m Model) renderError() string {
 	return errorStyle.Render(fmt.Sprintf("\n\n  ❌ Error: %v\n\n  Press 'r' to retry or 'q' to quit.\n\n", m.err))
+}
+
+// applyScroll aplica scroll ao conteúdo
+func (m Model) applyScroll(content string) string {
+	lines := strings.Split(content, "\n")
+
+	// Calcular quantas linhas cabem na tela
+	// Reservar espaço para header (3 linhas) + tabs (2 linhas) + footer (4 linhas)
+	availableLines := m.height - 9
+	if availableLines < 10 {
+		availableLines = 10
+	}
+
+	// Calcular maxScroll baseado no conteúdo
+	maxScroll := len(lines) - availableLines
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+
+	// Se cabe tudo na tela, não precisa scroll
+	if len(lines) <= availableLines {
+		return content
+	}
+
+	// Garantir que scrollOffset não exceda maxScroll
+	scrollOffset := m.scrollOffset
+	if scrollOffset > maxScroll {
+		scrollOffset = maxScroll
+	}
+
+	// Aplicar offset de scroll
+	start := scrollOffset
+	end := scrollOffset + availableLines
+
+	if end > len(lines) {
+		end = len(lines)
+	}
+
+	scrolledLines := lines[start:end]
+
+	// Adicionar indicador de scroll
+	scrollInfo := ""
+	if scrollOffset > 0 {
+		scrollInfo += dimStyle.Render("▲ ") // Tem conteúdo acima
+	}
+	scrollInfo += dimStyle.Render(fmt.Sprintf("[%d-%d of %d lines]", start+1, end, len(lines)))
+	if scrollOffset < maxScroll {
+		scrollInfo += dimStyle.Render(" ▼") // Tem conteúdo abaixo
+	}
+
+	return strings.Join(scrolledLines, "\n") + "\n\n" + scrollInfo
+}
+
+// renderHelp renderiza a tela de ajuda
+func (m Model) renderHelp() string {
+	helpStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#7D56F4")).
+		Padding(1, 2).
+		Width(m.width - 4)
+
+	content := strings.Builder{}
+
+	content.WriteString(titleStyle.Render("LogDash TUI - Help") + "\n\n")
+
+	// Navigation
+	content.WriteString(successStyle.Render("Navigation:") + "\n")
+	content.WriteString("  Tab / Shift+Tab    Switch between tabs\n")
+	content.WriteString("  ↑ / k              Scroll up one line\n")
+	content.WriteString("  ↓ / j              Scroll down one line\n")
+	content.WriteString("  PageUp / Ctrl+U    Scroll up one page\n")
+	content.WriteString("  PageDown / Ctrl+D  Scroll down one page\n")
+	content.WriteString("  Home / g           Go to top\n")
+	content.WriteString("  End / G            Go to bottom\n\n")
+
+	// Actions
+	content.WriteString(successStyle.Render("Actions:") + "\n")
+	content.WriteString("  r                  Refresh (re-analyze logs)\n")
+	content.WriteString("  ?                  Toggle this help screen\n")
+	content.WriteString("  Esc                Close help screen\n")
+	content.WriteString("  q / Ctrl+C         Quit application\n\n")
+
+	// Tabs
+	content.WriteString(successStyle.Render("Available Tabs:") + "\n")
+	content.WriteString("  1. Overview        Summary and statistics\n")
+	content.WriteString("  2. Errors          All error messages (grouped)\n")
+	content.WriteString("  3. Warnings        All warning messages (grouped)\n")
+	content.WriteString("  4. Top Messages    Most frequent messages (all levels)\n")
+	content.WriteString("  5. Timeline        Temporal distribution graph\n")
+	content.WriteString("  6. Anomalies       Detected anomalies\n\n")
+
+	// Tips
+	content.WriteString(successStyle.Render("Tips:") + "\n")
+	content.WriteString("  • Use arrow keys or vim bindings (j/k) for navigation\n")
+	content.WriteString("  • Messages are grouped by content to avoid duplication\n")
+	content.WriteString("  • Counter (xN) shows occurrence count\n")
+	content.WriteString("  • Scroll indicators (▲▼) show more content available\n\n")
+
+	// Footer
+	content.WriteString(dimStyle.Render("Press '?' or 'Esc' to close this help screen"))
+
+	return lipgloss.Place(
+		m.width,
+		m.height,
+		lipgloss.Center,
+		lipgloss.Center,
+		helpStyle.Render(content.String()),
+	)
 }
 
 // Helper functions
