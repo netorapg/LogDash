@@ -43,21 +43,37 @@ Visão geral da análise:
 - Distribuição por nível (Error, Warning, Info, etc)
 - Cores indicando severidade
 
-#### 2. Top Messages
-Mensagens mais frequentes:
-- Top 15 mensagens
+#### 2. Errors
+Todas as mensagens de erro agrupadas:
+- Lista de erros únicos com contador
+- Não há duplicação - cada mensagem aparece uma vez
+- Mostra quantas vezes cada erro ocorreu
+- Primeiro e último timestamp de cada erro
+- Limitado a top 20 para visualização
+
+#### 3. Warnings
+Todas as mensagens de warning agrupadas:
+- Lista de warnings únicos com contador
+- Não há duplicação - cada mensagem aparece uma vez
+- Mostra quantas vezes cada warning ocorreu
+- Primeiro e último timestamp de cada warning
+- Limitado a top 20 para visualização
+
+#### 4. Top Messages
+Mensagens mais frequentes (todos os níveis):
+- Top 15 mensagens de qualquer nível
 - Contador de ocorrências
 - Nível de severidade com cores
 - Primeiro e último timestamp
 
-#### 3. Timeline
+#### 5. Timeline
 Distribuição temporal:
 - Gráfico de barras no tempo
 - Até 20 pontos temporais
 - Destaque para erros
 - Escala visual proporcional
 
-#### 4. Anomalies
+#### 6. Anomalies
 Anomalias detectadas:
 - Tipo de anomalia
 - Descrição detalhada
@@ -72,9 +88,12 @@ Anomalias detectadas:
 │ LogDash TUI                                                     │
 │ Path: /var/log                                                  │
 │                                                                 │
-│ ╭─────────╮ ╭─────────────╮ ╭─────────╮ ╭───────────╮        │
-│ │Overview │ │Top Messages │ │Timeline │ │ Anomalies │        │
-│ ╰─────────╯ ╰─────────────╯ ╰─────────╯ ╰───────────╯        │
+│ ╭─────────╮ ╭───────╮ ╭─────────╮ ╭─────────────╮ ╭─────────╮│
+│ │Overview │ │Errors │ │Warnings │ │Top Messages │ │Timeline │││
+│ ╰─────────╯ ╰───────╯ ╰─────────╯ ╰─────────────╯ ╰─────────╯││
+│ ╭───────────╮                                                  │
+│ │ Anomalies │                                                  │
+│ ╰───────────╯                                                  │
 │                                                                 │
 │ Summary                                                         │
 │   Analyzed 1543 log entries, 47 errors, 23 warnings           │

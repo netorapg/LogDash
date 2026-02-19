@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/netorapg/LogDash/internal/core/aggregator"
 	"github.com/netorapg/LogDash/internal/core/parser"
 	"github.com/netorapg/LogDash/internal/service"
 )
@@ -33,12 +34,14 @@ type Model struct {
 // Tabs disponíveis
 const (
 	tabOverview = iota
+	tabErrors
+	tabWarnings
 	tabTopMessages
 	tabTimeline
 	tabAnomalies
 )
 
-var tabNames = []string{"Overview", "Top Messages", "Timeline", "Anomalies"}
+var tabNames = []string{"Overview", "Errors", "Warnings", "Top Messages", "Timeline", "Anomalies"}
 
 // NewModel cria novo modelo TUI
 func NewModel(rootPath string, opts service.AnalyzeOptions) Model {
@@ -132,6 +135,10 @@ func (m Model) View() string {
 	switch m.activeTab {
 	case tabOverview:
 		content = m.renderOverview()
+	case tabErrors:
+		content = m.renderErrors()
+	case tabWarnings:
+		content = m.renderWarnings()
 	case tabTopMessages:
 		content = m.renderTopMessages()
 	case tabTimeline:
@@ -249,6 +256,101 @@ func (m Model) renderOverview() string {
 	}
 	if count := r.ByLevel[parser.LevelTrace]; count > 0 {
 		b.WriteString(dimStyle.Render(fmt.Sprintf("  🔍 Trace:   %d\n", count)))
+	}
+
+	return b.String()
+}
+
+func (m Model) renderErrors() string {
+	r := m.result
+
+	if len(r.TopMessages) == 0 {
+		return dimStyle.Render("No messages found")
+	}
+
+	// Filtrar apenas erros e fatals
+	errors := []aggregator.MessageFrequency{}
+	for _, msg := range r.TopMessages {
+		if msg.Level == parser.LevelError || msg.Level == parser.LevelFatal {
+			errors = append(errors, msg)
+		}
+	}
+
+	if len(errors) == 0 {
+		return successStyle.Render("✓ No errors found")
+	}
+
+	var b strings.Builder
+	b.WriteString(errorStyle.Render(fmt.Sprintf("❌ %d Error Messages", len(errors))) + "\n\n")
+
+	for i, msg := range errors {
+		if i >= 20 { // Limitar a 20 para caber na tela
+			remaining := len(errors) - 20
+			b.WriteString(dimStyle.Render(fmt.Sprintf("\n   ... and %d more errors", remaining)))
+			break
+		}
+
+		icon := "💀"
+		if msg.Level == parser.LevelError {
+			icon = "❌"
+		}
+
+		// Número, ícone e mensagem
+		b.WriteString(fmt.Sprintf("%2d. %s %s ", i+1, icon, truncate(msg.Message, 60)))
+		b.WriteString(errorStyle.Render(fmt.Sprintf("(x%d)", msg.Count)))
+		b.WriteString("\n")
+
+		// Timestamps
+		if !msg.FirstSeen.IsZero() {
+			b.WriteString(dimStyle.Render(fmt.Sprintf("    First: %s | Last: %s\n",
+				msg.FirstSeen.Format("15:04:05"),
+				msg.LastSeen.Format("15:04:05"))))
+		}
+	}
+
+	return b.String()
+}
+
+func (m Model) renderWarnings() string {
+	r := m.result
+
+	if len(r.TopMessages) == 0 {
+		return dimStyle.Render("No messages found")
+	}
+
+	// Filtrar apenas warnings
+	warnings := []aggregator.MessageFrequency{}
+	for _, msg := range r.TopMessages {
+		if msg.Level == parser.LevelWarning {
+			warnings = append(warnings, msg)
+		}
+	}
+
+	if len(warnings) == 0 {
+		return successStyle.Render("✓ No warnings found")
+	}
+
+	var b strings.Builder
+	b.WriteString(warningStyle.Render(fmt.Sprintf("⚠️  %d Warning Messages", len(warnings))) + "\n\n")
+
+	for i, msg := range warnings {
+		if i >= 20 { // Limitar a 20 para caber na tela
+			remaining := len(warnings) - 20
+			b.WriteString(dimStyle.Render(fmt.Sprintf("\n   ... and %d more warnings", remaining)))
+			break
+		}
+
+		// Número, ícone e mensagem
+		b.WriteString(fmt.Sprintf("%2d. ⚠️  %s ", i+1, truncate(msg.Message, 60)))
+		b.WriteString(warningStyle.Render(fmt.Sprintf("(x%d)", msg.Count)))
+		b.WriteString("\n")
+
+		// Timestamps
+		if !msg.FirstSeen.IsZero() {
+			b.WriteString(dimStyle.Render(fmt.Sprintf("    First: %s | Last: %s\n",
+				msg.FirstSeen.Format("15:04:05"),
+				msg.LastSeen.Format("15:04:05"))))
+		}
 	}
 
 	return b.String()
@@ -460,6 +562,12 @@ func analyzeCmd(rootPath string, opts service.AnalyzeOptions) tea.Cmd {
 	return func() tea.Msg {
 		svc := service.NewLogDashService()
 		opts.RootPath = rootPath
+
+		// Aumentar limite para capturar TODAS as mensagens únicas
+		// (necessário para tabs Errors e Warnings funcionarem corretamente)
+		if opts.AggregateOpts.TopMessagesLimit < 1000 {
+			opts.AggregateOpts.TopMessagesLimit = 1000
+		}
 
 		result, err := svc.AnalyzeLogs(opts)
 
