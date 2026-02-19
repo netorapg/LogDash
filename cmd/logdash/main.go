@@ -8,9 +8,11 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/netorapg/LogDash/internal/core/aggregator"
 	"github.com/netorapg/LogDash/internal/core/parser"
 	"github.com/netorapg/LogDash/internal/service"
+	"github.com/netorapg/LogDash/internal/tui"
 )
 
 const version = "0.1.0"
@@ -27,6 +29,8 @@ func main() {
 	switch command {
 	case "analyze":
 		analyzeCommand()
+	case "tui":
+		tuiCommand()
 	case "version":
 		versionCommand()
 	case "help":
@@ -108,6 +112,66 @@ func analyzeCommand() {
 	printResults(result, *verbose)
 }
 
+func tuiCommand() {
+	// Definir flags para tui
+	tuiFlags := flag.NewFlagSet("tui", flag.ExitOnError)
+
+	path := tuiFlags.String("path", ".", "Root path to search for logs")
+	maxFiles := tuiFlags.Int("max-files", 0, "Maximum number of files to process (0 = no limit)")
+	maxDepth := tuiFlags.Int("depth", 10, "Maximum directory depth to search")
+	patterns := tuiFlags.String("patterns", "*.log,*.txt", "File patterns to match (comma-separated)")
+	last := tuiFlags.String("last", "", "Analyze logs from last duration (e.g., '24h', '7d')")
+	noAnomalies := tuiFlags.Bool("no-anomalies", false, "Disable anomaly detection")
+
+	tuiFlags.Parse(os.Args[2:])
+
+	// Validar path
+	if *path == "" {
+		fmt.Fprintln(os.Stderr, "Error: path cannot be empty")
+		os.Exit(1)
+	}
+
+	// Preparar opções
+	opts := service.DefaultAnalyzeOptions()
+	opts.RootPath = *path
+	opts.MaxFilesToProcess = *maxFiles
+	opts.DiscoverOpts.MaxDepth = *maxDepth
+
+	// Configurar patterns
+	if *patterns != "" {
+		patternList := strings.Split(*patterns, ",")
+		for i := range patternList {
+			patternList[i] = strings.TrimSpace(patternList[i])
+		}
+		opts.DiscoverOpts.FilePatterns = patternList
+	}
+
+	// Configurar time range se especificado
+	if *last != "" {
+		duration, err := parseDuration(*last)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing duration '%s': %v\n", *last, err)
+			os.Exit(1)
+		}
+		opts.AggregateOpts.TimeRange = aggregator.TimeRange{
+			Start: time.Now().Add(-duration),
+			End:   time.Now(),
+		}
+	}
+
+	// Configurar anomaly detection
+	opts.AggregateOpts.DetectAnomalies = !*noAnomalies
+
+	// Iniciar TUI
+	model := tui.NewModel(*path, opts)
+	p := tea.NewProgram(model, tea.WithAltScreen())
+
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error running TUI: %v\n", err)
+		os.Exit(1)
+	}
+}
+
 func versionCommand() {
 	fmt.Printf("LogDash v%s\n", version)
 	fmt.Println("A fast and intelligent log analysis tool")
@@ -120,7 +184,8 @@ func printUsage() {
 	fmt.Println("  logdash <command> [options]")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  analyze    Analyze log files")
+	fmt.Println("  analyze    Analyze log files (command-line output)")
+	fmt.Println("  tui        Interactive terminal UI")
 	fmt.Println("  version    Show version information")
 	fmt.Println("  help       Show this help message")
 	fmt.Println()
@@ -143,11 +208,17 @@ func printUsage() {
 	fmt.Println("        Verbose output")
 	fmt.Println()
 	fmt.Println("Examples:")
+	fmt.Println("  # Command-line analysis")
 	fmt.Println("  logdash analyze")
 	fmt.Println("  logdash analyze -path /var/log")
 	fmt.Println("  logdash analyze -path /var/log -last 24h")
 	fmt.Println("  logdash analyze -path ./logs -max-files 5 -verbose")
 	fmt.Println("  logdash analyze -path /app/logs -patterns '*.log' -depth 3")
+	fmt.Println()
+	fmt.Println("  # Interactive TUI")
+	fmt.Println("  logdash tui")
+	fmt.Println("  logdash tui -path /var/log")
+	fmt.Println("  logdash tui -path /var/log -last 24h")
 }
 
 func printResults(result *service.AnalysisResult, verbose bool) {
