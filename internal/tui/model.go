@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/netorapg/LogDash/internal/core/aggregator"
@@ -27,8 +28,9 @@ type Model struct {
 	width     int
 	height    int
 
-	// Scroll state
-	scrollOffset int // Offset atual do scroll
+	// Viewport para scroll
+	viewport viewport.Model
+	ready    bool // viewport está pronto
 
 	// Help screen
 	showHelp bool
@@ -77,6 +79,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+
+		viewportHeight := msg.Height - 9
+		if viewportHeight < 10 {
+			viewportHeight = 10
+		}
+
+		if !m.ready {
+			m.viewport = viewport.New(msg.Width, viewportHeight)
+			m.viewport.YPosition = 5
+			m.ready = true
+		} else {
+			m.viewport.Width = msg.Width
+			m.viewport.Height = viewportHeight
+		}
+
+		m.updateViewportContent()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -92,7 +110,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "?":
 			// Toggle help screen
 			m.showHelp = !m.showHelp
-			m.scrollOffset = 0 // Reset scroll ao abrir help
 			return m, nil
 
 		case "esc":
@@ -106,7 +123,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Próxima tab
 			if !m.showHelp {
 				m.activeTab = (m.activeTab + 1) % len(tabNames)
-				m.scrollOffset = 0 // Reset scroll ao trocar tab
+				m.updateViewportContent()
+				if m.ready {
+					m.viewport.GotoTop()
+				}
 				return m, nil
 			}
 
@@ -114,53 +134,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Tab anterior
 			if !m.showHelp {
 				m.activeTab = (m.activeTab - 1 + len(tabNames)) % len(tabNames)
-				m.scrollOffset = 0 // Reset scroll ao trocar tab
+				m.updateViewportContent()
+				if m.ready {
+					m.viewport.GotoTop()
+				}
 				return m, nil
 			}
 
 		case "up", "k":
-			// Scroll up
-			if !m.showHelp && m.scrollOffset > 0 {
-				m.scrollOffset--
+			// Scroll up no viewport
+			if !m.showHelp && m.ready {
+				m.viewport.LineUp(1)
 			}
 			return m, nil
 
 		case "down", "j":
-			// Scroll down (limite será aplicado em applyScroll)
-			if !m.showHelp {
-				m.scrollOffset++
+			// Scroll down no viewport
+			if !m.showHelp && m.ready {
+				m.viewport.LineDown(1)
 			}
 			return m, nil
 
 		case "pageup", "ctrl+u":
-			// Scroll up uma página (10 linhas)
-			if !m.showHelp {
-				m.scrollOffset -= 10
-				if m.scrollOffset < 0 {
-					m.scrollOffset = 0
-				}
+			// Page up no viewport
+			if !m.showHelp && m.ready {
+				m.viewport.ViewUp()
 			}
 			return m, nil
 
-		case "pagedown", "ctrl+d":
-			// Scroll down uma página (10 linhas)
-			if !m.showHelp {
-				m.scrollOffset += 10
-				// Limite será aplicado em applyScroll
+		case "pagedown", "ctrl+d", " ":
+			// Page down no viewport
+			if !m.showHelp && m.ready {
+				m.viewport.ViewDown()
 			}
 			return m, nil
 
 		case "home", "g":
-			// Início
-			if !m.showHelp {
-				m.scrollOffset = 0
+			// Topo no viewport
+			if !m.showHelp && m.ready {
+				m.viewport.GotoTop()
 			}
 			return m, nil
 
 		case "end", "G":
-			// Fim (definir valor alto, será limitado em applyScroll)
-			if !m.showHelp {
-				m.scrollOffset = 9999
+			// Final no viewport
+			if !m.showHelp && m.ready {
+				m.viewport.GotoBottom()
 			}
 			return m, nil
 
@@ -169,7 +188,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.showHelp {
 				m.loading = true
 				m.statusMsg = "Refreshing..."
-				m.scrollOffset = 0
+				if m.ready {
+					m.viewport.GotoTop()
+				}
 				return m, analyzeCmd(m.rootPath, m.opts)
 			}
 		}
@@ -183,6 +204,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.statusMsg = "Analysis complete"
 		}
+		m.updateViewportContent()
 		return m, nil
 	}
 
@@ -208,40 +230,30 @@ func (m Model) View() string {
 		return m.renderHelp()
 	}
 
-	// Header
+	// Header (fixo)
 	header := m.renderHeader()
 
-	// Tabs
+	// Tabs (fixas)
 	tabs := m.renderTabs()
 
-	// Content baseado na tab ativa (com scroll aplicado)
-	var content string
-	switch m.activeTab {
-	case tabOverview:
-		content = m.renderOverview()
-	case tabErrors:
-		content = m.renderErrors()
-	case tabWarnings:
-		content = m.renderWarnings()
-	case tabTopMessages:
-		content = m.renderTopMessages()
-	case tabTimeline:
-		content = m.renderTimeline()
-	case tabAnomalies:
-		content = m.renderAnomalies()
-	}
-
-	// Aplicar scroll ao conteúdo
-	content = m.applyScroll(content)
-
-	// Footer
+	// Footer (fixo)
 	footer := m.renderFooter()
+
+	// Montar interface: partes fixas + viewport scrollável
+	if !m.ready {
+		return lipgloss.JoinVertical(
+			lipgloss.Left,
+			header,
+			tabs,
+			footer,
+		)
+	}
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		header,
 		tabs,
-		content,
+		m.viewport.View(),
 		footer,
 	)
 }
@@ -367,10 +379,12 @@ func (m Model) renderErrors() string {
 		return successStyle.Render("✓ No errors found")
 	}
 
-	var b strings.Builder
-	b.WriteString(errorStyle.Render(fmt.Sprintf("❌ %d Error Messages", len(errors))) + "\n\n")
+	// Título fixo (não scrolla)
+	title := errorStyle.Render(fmt.Sprintf("❌ %d Error Messages", len(errors)))
 
-	// Renderizar TODAS as mensagens (scroll será aplicado depois)
+	// Conteúdo scrollável
+	var b strings.Builder
+
 	for i, msg := range errors {
 		icon := "💀"
 		if msg.Level == parser.LevelError {
@@ -390,7 +404,7 @@ func (m Model) renderErrors() string {
 		}
 	}
 
-	return b.String()
+	return title + "\n\n" + b.String()
 }
 
 func (m Model) renderWarnings() string {
@@ -412,10 +426,12 @@ func (m Model) renderWarnings() string {
 		return successStyle.Render("✓ No warnings found")
 	}
 
-	var b strings.Builder
-	b.WriteString(warningStyle.Render(fmt.Sprintf("⚠️  %d Warning Messages", len(warnings))) + "\n\n")
+	// Título fixo (não scrolla)
+	title := warningStyle.Render(fmt.Sprintf("⚠️  %d Warning Messages", len(warnings)))
 
-	// Renderizar TODAS as mensagens (scroll será aplicado depois)
+	// Conteúdo scrollável
+	var b strings.Builder
+
 	for i, msg := range warnings {
 		// Número, ícone e mensagem
 		b.WriteString(fmt.Sprintf("%2d. ⚠️  %s ", i+1, truncate(msg.Message, 60)))
@@ -430,7 +446,7 @@ func (m Model) renderWarnings() string {
 		}
 	}
 
-	return b.String()
+	return title + "\n\n" + b.String()
 }
 
 func (m Model) renderTopMessages() string {
@@ -579,57 +595,6 @@ func (m Model) renderError() string {
 	return errorStyle.Render(fmt.Sprintf("\n\n  ❌ Error: %v\n\n  Press 'r' to retry or 'q' to quit.\n\n", m.err))
 }
 
-// applyScroll aplica scroll ao conteúdo
-func (m Model) applyScroll(content string) string {
-	lines := strings.Split(content, "\n")
-
-	// Calcular quantas linhas cabem na tela
-	// Reservar espaço para header (3 linhas) + tabs (2 linhas) + footer (4 linhas)
-	availableLines := m.height - 9
-	if availableLines < 10 {
-		availableLines = 10
-	}
-
-	// Calcular maxScroll baseado no conteúdo
-	maxScroll := len(lines) - availableLines
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-
-	// Se cabe tudo na tela, não precisa scroll
-	if len(lines) <= availableLines {
-		return content
-	}
-
-	// Garantir que scrollOffset não exceda maxScroll
-	scrollOffset := m.scrollOffset
-	if scrollOffset > maxScroll {
-		scrollOffset = maxScroll
-	}
-
-	// Aplicar offset de scroll
-	start := scrollOffset
-	end := scrollOffset + availableLines
-
-	if end > len(lines) {
-		end = len(lines)
-	}
-
-	scrolledLines := lines[start:end]
-
-	// Adicionar indicador de scroll
-	scrollInfo := ""
-	if scrollOffset > 0 {
-		scrollInfo += dimStyle.Render("▲ ") // Tem conteúdo acima
-	}
-	scrollInfo += dimStyle.Render(fmt.Sprintf("[%d-%d of %d lines]", start+1, end, len(lines)))
-	if scrollOffset < maxScroll {
-		scrollInfo += dimStyle.Render(" ▼") // Tem conteúdo abaixo
-	}
-
-	return strings.Join(scrolledLines, "\n") + "\n\n" + scrollInfo
-}
-
 // renderHelp renderiza a tela de ajuda
 func (m Model) renderHelp() string {
 	helpStyle := lipgloss.NewStyle().
@@ -726,6 +691,31 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// updateViewportContent atualiza o conteúdo do viewport baseado na tab ativa
+func (m *Model) updateViewportContent() {
+	if !m.ready || m.result == nil {
+		return
+	}
+
+	var content string
+	switch m.activeTab {
+	case tabOverview:
+		content = m.renderOverview()
+	case tabErrors:
+		content = m.renderErrors()
+	case tabWarnings:
+		content = m.renderWarnings()
+	case tabTopMessages:
+		content = m.renderTopMessages()
+	case tabTimeline:
+		content = m.renderTimeline()
+	case tabAnomalies:
+		content = m.renderAnomalies()
+	}
+
+	m.viewport.SetContent(content)
 }
 
 // Commands
