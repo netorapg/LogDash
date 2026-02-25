@@ -13,6 +13,7 @@ import (
 	"github.com/netorapg/LogDash/internal/core/parser"
 	"github.com/netorapg/LogDash/internal/service"
 	"github.com/netorapg/LogDash/internal/tui"
+	"github.com/netorapg/LogDash/internal/web/server"
 )
 
 const version = "0.1.0"
@@ -31,6 +32,8 @@ func main() {
 		analyzeCommand()
 	case "tui":
 		tuiCommand()
+	case "web":
+		webCommand()
 	case "version":
 		versionCommand()
 	case "help":
@@ -45,7 +48,7 @@ func main() {
 func analyzeCommand() {
 	// Definir flags para analyze
 	analyzeFlags := flag.NewFlagSet("analyze", flag.ExitOnError)
-
+	
 	path := analyzeFlags.String("path", ".", "Root path to search for logs")
 	maxFiles := analyzeFlags.Int("max-files", 0, "Maximum number of files to process (0 = no limit)")
 	maxDepth := analyzeFlags.Int("depth", 10, "Maximum directory depth to search")
@@ -66,11 +69,11 @@ func analyzeCommand() {
 	// Criar service
 	svc := service.NewLogDashService()
 	opts := service.DefaultAnalyzeOptions()
-
+	
 	opts.RootPath = *path
 	opts.MaxFilesToProcess = *maxFiles
 	opts.DiscoverOpts.MaxDepth = *maxDepth
-
+	
 	// Configurar patterns
 	if *patterns != "" {
 		patternList := strings.Split(*patterns, ",")
@@ -95,13 +98,13 @@ func analyzeCommand() {
 
 	// Configurar anomaly detection
 	opts.AggregateOpts.DetectAnomalies = !*noAnomalies
-
+	
 	// Configurar top messages
 	opts.AggregateOpts.TopMessagesLimit = *topMessages
 
 	// Executar análise
 	fmt.Printf("🔍 Analyzing logs in: %s\n\n", *path)
-
+	
 	result, err := svc.AnalyzeLogs(opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Analysis failed: %v\n", err)
@@ -115,7 +118,7 @@ func analyzeCommand() {
 func tuiCommand() {
 	// Definir flags para tui
 	tuiFlags := flag.NewFlagSet("tui", flag.ExitOnError)
-
+	
 	path := tuiFlags.String("path", ".", "Root path to search for logs")
 	maxFiles := tuiFlags.Int("max-files", 0, "Maximum number of files to process (0 = no limit)")
 	maxDepth := tuiFlags.Int("depth", 10, "Maximum directory depth to search")
@@ -136,7 +139,7 @@ func tuiCommand() {
 	opts.RootPath = *path
 	opts.MaxFilesToProcess = *maxFiles
 	opts.DiscoverOpts.MaxDepth = *maxDepth
-
+	
 	// Configurar patterns
 	if *patterns != "" {
 		patternList := strings.Split(*patterns, ",")
@@ -165,9 +168,32 @@ func tuiCommand() {
 	// Iniciar TUI
 	model := tui.NewModel(*path, opts)
 	p := tea.NewProgram(model, tea.WithAltScreen())
-
+	
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running TUI: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func webCommand() {
+	// Definir flags para web
+	webFlags := flag.NewFlagSet("web", flag.ExitOnError)
+	
+	path := webFlags.String("path", ".", "Root path to search for logs")
+	port := webFlags.Int("port", 8080, "Port to run web server")
+
+	webFlags.Parse(os.Args[2:])
+
+	// Validar path
+	if *path == "" {
+		fmt.Fprintln(os.Stderr, "Error: path cannot be empty")
+		os.Exit(1)
+	}
+
+	// Iniciar servidor web
+	server := web.NewServer(*path, *port)
+	if err := server.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error starting web server: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -186,6 +212,7 @@ func printUsage() {
 	fmt.Println("Commands:")
 	fmt.Println("  analyze    Analyze log files (command-line output)")
 	fmt.Println("  tui        Interactive terminal UI")
+	fmt.Println("  web        Web dashboard UI")
 	fmt.Println("  version    Show version information")
 	fmt.Println("  help       Show this help message")
 	fmt.Println()
@@ -219,6 +246,11 @@ func printUsage() {
 	fmt.Println("  logdash tui")
 	fmt.Println("  logdash tui -path /var/log")
 	fmt.Println("  logdash tui -path /var/log -last 24h")
+	fmt.Println()
+	fmt.Println("  # Web Dashboard")
+	fmt.Println("  logdash web")
+	fmt.Println("  logdash web -path /var/log")
+	fmt.Println("  logdash web -path /var/log -port 3000")
 }
 
 func printResults(result *service.AnalysisResult, verbose bool) {
@@ -253,7 +285,7 @@ func printResults(result *service.AnalysisResult, verbose bool) {
 				break
 			}
 			icon := getLevelIcon(msg.Level)
-			fmt.Printf("   %d. %s [%s] %s (x%d)\n",
+			fmt.Printf("   %d. %s [%s] %s (x%d)\n", 
 				i+1, icon, msg.Level, truncate(msg.Message, 60), msg.Count)
 		}
 		fmt.Println()
@@ -360,11 +392,11 @@ func truncate(s string, maxLen int) string {
 func parseDuration(s string) (time.Duration, error) {
 	// Suportar formatos como "24h", "7d", "30m"
 	s = strings.TrimSpace(s)
-
+	
 	if strings.HasSuffix(s, "d") {
 		days := s[:len(s)-1]
 		return time.ParseDuration(days + "h")
 	}
-
+	
 	return time.ParseDuration(s)
 }
