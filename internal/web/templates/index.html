@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LogDash - Log Analysis Dashboard</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- htmx -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    
+    <!-- Alpine.js -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    
+    <style>
+        [x-cloak] { display: none !important; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100" x-data="dashboard()">
+    
+    <!-- Header -->
+    <header class="bg-gray-800 border-b border-gray-700">
+        <div class="container mx-auto px-4 py-4">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h1 class="text-2xl font-bold text-purple-400">LogDash</h1>
+                    <p class="text-sm text-gray-400">{{ .RootPath }}</p>
+                </div>
+                
+                <button 
+                    @click="refresh()"
+                    class="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg transition"
+                    :disabled="loading"
+                >
+                    <span x-show="!loading">🔄 Refresh</span>
+                    <span x-show="loading" x-cloak>⏳ Loading...</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="container mx-auto px-4 py-8">
+        
+        <!-- Stats Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+            <!-- Total Entries -->
+            <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+                <div class="text-gray-400 text-sm mb-2">Total Entries</div>
+                <div class="text-3xl font-bold" x-text="stats.total_entries || 0"></div>
+            </div>
+            
+            <!-- Errors -->
+            <div class="bg-gray-800 rounded-lg p-6 border border-red-900">
+                <div class="text-gray-400 text-sm mb-2">❌ Errors</div>
+                <div class="text-3xl font-bold text-red-400" x-text="(stats.by_level?.[1] || 0) + (stats.by_level?.[0] || 0)"></div>
+
+            </div>
+            
+            <!-- Warnings -->
+            <div class="bg-gray-800 rounded-lg p-6 border border-yellow-900">
+                <div class="text-gray-400 text-sm mb-2">⚠️  Warnings</div>
+                <div class="text-3xl font-bold text-yellow-400" x-text="stats.by_level?.[2] || 0"></div>
+            </div>
+            
+            <!-- Anomalies -->
+            <div class="bg-gray-800 rounded-lg p-6 border border-orange-900">
+                <div class="text-gray-400 text-sm mb-2">🚨 Anomalies</div>
+                <div class="text-3xl font-bold text-orange-400" x-text="stats.anomalies_count || 0"></div>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="mb-6">
+            <div class="flex space-x-2 border-b border-gray-700">
+                <button 
+                    @click="activeTab = 'overview'"
+                    :class="activeTab === 'overview' ? 'border-purple-500 text-purple-400' : 'border-transparent text-gray-400 hover:text-gray-300'"
+                    class="px-4 py-2 border-b-2 font-medium transition"
+                >
+                    Overview
+                </button>
+                <button 
+                    @click="activeTab = 'errors'"
+                    :class="activeTab === 'errors' ? 'border-purple-500 text-purple-400' : 'border-transparent text-gray-400 hover:text-gray-300'"
+                    class="px-4 py-2 border-b-2 font-medium transition"
+                >
+                    Errors
+                </button>
+                <button 
+                    @click="activeTab = 'warnings'"
+                    :class="activeTab === 'warnings' ? 'border-purple-500 text-purple-400' : 'border-transparent text-gray-400 hover:text-gray-300'"
+                    class="px-4 py-2 border-b-2 font-medium transition"
+                >
+                    Warnings
+                </button>
+                <button 
+                    @click="activeTab = 'timeline'"
+                    :class="activeTab === 'timeline' ? 'border-purple-500 text-purple-400' : 'border-transparent text-gray-400 hover:text-gray-300'"
+                    class="px-4 py-2 border-b-2 font-medium transition"
+                >
+                    Timeline
+                </button>
+                <button 
+                    @click="activeTab = 'anomalies'"
+                    :class="activeTab === 'anomalies' ? 'border-purple-500 text-purple-400' : 'border-transparent text-gray-400 hover:text-gray-300'"
+                    class="px-4 py-2 border-b-2 font-medium transition"
+                >
+                    Anomalies
+                </button>
+            </div>
+        </div>
+
+        <!-- Tab Content -->
+        <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+            
+            <!-- Overview Tab -->
+            <div x-show="activeTab === 'overview'" x-cloak>
+                <h2 class="text-xl font-bold mb-4">Summary</h2>
+                <p class="text-gray-300 mb-6" x-text="stats.summary"></p>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- Files Info -->
+                    <div>
+                        <h3 class="text-lg font-semibold mb-3 text-purple-400">📁 Files</h3>
+                        <ul class="space-y-2 text-gray-300">
+                            <li>Discovered: <span class="font-mono" x-text="stats.files_discovered"></span></li>
+                            <li>Processed: <span class="font-mono" x-text="stats.files_processed"></span></li>
+                            <li>Entries: <span class="font-mono" x-text="stats.total_entries"></span></li>
+                        </ul>
+                    </div>
+                    
+                    <!-- By Level -->
+                    <div>
+                        <h3 class="text-lg font-semibold mb-3 text-purple-400">📊 By Level</h3>
+                        <ul class="space-y-2">
+                            <template x-for="(count, level) in stats.by_level" :key="level">
+                                <li class="flex items-center justify-between">
+                                    <span class="capitalize" x-text="level"></span>
+                                    <span class="font-mono font-bold" x-text="count"></span>
+                                </li>
+                            </template>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Errors Tab -->
+            <div x-show="activeTab === 'errors'" x-cloak>
+                <h2 class="text-xl font-bold mb-4 text-red-400">❌ Error Messages</h2>
+                
+                <div x-show="errors.length === 0" class="text-gray-400 text-center py-8">
+                    ✅ No errors found
+                </div>
+                
+                <div class="space-y-3">
+                    <template x-for="(error, index) in errors" :key="index">
+                        <div class="bg-gray-900 rounded-lg p-4 border border-red-900">
+                            <div class="flex items-start justify-between">
+                                <div class="flex-1">
+                                    <div class="flex items-center space-x-2 mb-2">
+                                        <span class="text-red-400 font-bold" x-text="`${index + 1}.`"></span>
+                                        <span class="text-red-400 font-mono text-sm" x-text="`(x${error.Count})`"></span>
+                                    </div>
+                                    <p class="text-gray-200 mb-2" x-text="error.Message"></p>
+                                    <div class="text-xs text-gray-500">
+                                        First: <span x-text="formatTime(error.FirstSeen)"></span> |
+                                        Last: <span x-text="formatTime(error.LastSeen)"></span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Warnings Tab -->
+            <div x-show="activeTab === 'warnings'" x-cloak>
+                <h2 class="text-xl font-bold mb-4 text-yellow-400">⚠️  Warning Messages</h2>
+                
+                <div x-show="warnings.length === 0" class="text-gray-400 text-center py-8">
+                    ✅ No warnings found
+                </div>
+                
+                <div class="space-y-3">
+                    <template x-for="(warning, index) in warnings" :key="index">
+                        <div class="bg-gray-900 rounded-lg p-4 border border-yellow-900">
+                            <div class="flex items-start justify-between">
+                                <div class="flex-1">
+                                    <div class="flex items-center space-x-2 mb-2">
+                                        <span class="text-yellow-400 font-bold" x-text="`${index + 1}.`"></span>
+                                        <span class="text-yellow-400 font-mono text-sm" x-text="`(x${warning.Count})`"></span>
+                                    </div>
+                                    <p class="text-gray-200 mb-2" x-text="warning.Message"></p>
+                                    <div class="text-xs text-gray-500">
+                                        First: <span x-text="formatTime(warning.FirstSeen)"></span> |
+                                        Last: <span x-text="formatTime(warning.LastSeen)"></span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Timeline Tab -->
+            <div x-show="activeTab === 'timeline'" x-cloak>
+                <h2 class="text-xl font-bold mb-4">📈 Timeline</h2>
+                <canvas id="timelineChart" class="w-full" style="max-height: 400px;"></canvas>
+            </div>
+
+            <!-- Anomalies Tab -->
+            <div x-show="activeTab === 'anomalies'" x-cloak>
+                <h2 class="text-xl font-bold mb-4 text-orange-400">🚨 Anomalies</h2>
+                
+                <div x-show="anomalies.length === 0" class="text-gray-400 text-center py-8">
+                    ✅ No anomalies detected
+                </div>
+                
+                <div class="space-y-3">
+                    <template x-for="(anomaly, index) in anomalies" :key="index">
+                        <div class="bg-gray-900 rounded-lg p-4 border border-orange-900">
+                            <div class="flex items-start justify-between">
+                                <div class="flex-1">
+                                    <div class="flex items-center space-x-2 mb-2">
+                                        <span x-text="getSeverityIcon(anomaly.Severity)"></span>
+                                        <span class="font-mono text-sm text-gray-400" x-text="`[${anomaly.Type}]`"></span>
+                                    </div>
+                                    <p class="text-gray-200 mb-2" x-text="anomaly.Description"></p>
+                                    <div class="text-xs text-gray-500">
+                                        Severity: <span x-text="anomaly.Severity.toFixed(2)"></span>
+                                        <template x-if="anomaly.Timestamp">
+                                            | Time: <span x-text="formatTime(anomaly.Timestamp)"></span>
+                                        </template>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        function dashboard() {
+            return {
+                loading: false,
+                activeTab: 'overview',
+                stats: {},
+                errors: [],
+                warnings: [],
+                timeline: [],
+                anomalies: [],
+                chart: null,
+
+                init() {
+                    this.loadData();
+                },
+
+                async loadData() {
+                    try {
+                        // Load stats
+                        const statsRes = await fetch('/api/stats');
+                        this.stats = await statsRes.json();
+
+                        // Load errors
+                        const errorsRes = await fetch('/api/errors');
+                        this.errors = await errorsRes.json();
+
+                        // Load warnings
+                        const warningsRes = await fetch('/api/warnings');
+                        this.warnings = await warningsRes.json();
+
+                        // Load timeline
+                        const timelineRes = await fetch('/api/timeline');
+                        this.timeline = await timelineRes.json();
+
+                        // Load anomalies
+                        const anomaliesRes = await fetch('/api/anomalies');
+                        this.anomalies = await anomaliesRes.json();
+
+                        // Update chart when timeline tab is viewed
+                        this.$watch('activeTab', (value) => {
+                            if (value === 'timeline') {
+                                this.$nextTick(() => this.renderChart());
+                            }
+                        });
+                    } catch (error) {
+                        console.error('Failed to load data:', error);
+                    }
+                },
+
+                async refresh() {
+                    this.loading = true;
+                    try {
+                        await fetch('/api/refresh');
+                        await this.loadData();
+                    } catch (error) {
+                        console.error('Failed to refresh:', error);
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                renderChart() {
+                    const canvas = document.getElementById('timelineChart');
+                    if (!canvas || !this.timeline) return;
+
+                    const ctx = canvas.getContext('2d');
+                    
+                    if (this.chart) {
+                        this.chart.destroy();
+                    }
+
+                    const labels = this.timeline.map(t => new Date(t.Timestamp).toLocaleTimeString());
+                    const data = this.timeline.map(t => t.Count);
+                    const errorData = this.timeline.map(t => t.ByLevel?.error || 0);
+
+                    this.chart = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                label: 'Total Logs',
+                                data: data,
+                                borderColor: 'rgb(168, 85, 247)',
+                                backgroundColor: 'rgba(168, 85, 247, 0.1)',
+                                tension: 0.4
+                            }, {
+                                label: 'Errors',
+                                data: errorData,
+                                borderColor: 'rgb(239, 68, 68)',
+                                backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                tension: 0.4
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: {
+                                    labels: {
+                                        color: 'rgb(209, 213, 219)'
+                                    }
+                                }
+                            },
+                            scales: {
+                                y: {
+                                    ticks: { color: 'rgb(209, 213, 219)' },
+                                    grid: { color: 'rgba(75, 85, 99, 0.3)' }
+                                },
+                                x: {
+                                    ticks: { color: 'rgb(209, 213, 219)' },
+                                    grid: { color: 'rgba(75, 85, 99, 0.3)' }
+                                }
+                            }
+                        }
+                    });
+                },
+
+                formatTime(timestamp) {
+                    if (!timestamp) return 'N/A';
+                    return new Date(timestamp).toLocaleString();
+                },
+
+                getSeverityIcon(severity) {
+                    if (severity >= 0.8) return '🚨';
+                    if (severity >= 0.5) return '⚠️';
+                    return 'ℹ️';
+                }
+            }
+        }
+    </script>
+</body>
+</html>
