@@ -1,164 +1,125 @@
 # LogDash
 
-> Um painel visual e interativo para investigação de logs, projetado para devs que precisam entender o que aconteceu no sistema.
+Point it at a directory and find out what happened. LogDash discovers log files, detects their format, and shows levels, a timeline, the most frequent messages and anomalies, in the terminal or in the browser.
 
-## O Problema
+One binary, no configuration, no services to run.
 
-Sistemas complexos geram logs em múltiplas pastas, formatos variados, e volumes crescentes. Investigar problemas significa navegar por dezenas de arquivos, usar grep repetidamente, e tentar reconstruir mentalmente a sequência de eventos. Warnings ficam invisíveis no meio do ruído.
+<!-- Add a screenshot of the TUI and one of the web dashboard here.
+<p align="center"><img src="docs/tui.png" width="720"/></p>
+-->
 
-## A Solução
+## Why
 
-LogDash é uma ferramenta portátil que:
-- 🔍 Descobre automaticamente logs em qualquer projeto
-- 📊 Apresenta uma visão agregada e visual em segundos
-- 🎯 Destaca padrões, tendências e warnings ignorados
-- 🚀 Roda sem instalação — basta executar
-- 💻 Interface CLI poderosa e intuitiva
+Real systems scatter logs across folders and formats. Investigating an incident usually means opening dozens of files, repeating `grep`, and rebuilding the sequence of events in your head, while warnings stay buried in the noise. LogDash gives you the aggregated picture first, so you know where to look.
 
-## Quick Start
+## Install
 
-### Instalação
+Requires Go 1.21 or newer.
 
 ```bash
-# Clone o repositório
 git clone https://github.com/netorapg/LogDash.git
 cd LogDash
-
-# Build
 go build -o logdash ./cmd/logdash
-
-# Executar
-./logdash analyze -path /var/log
 ```
 
-### Uso Básico
+## Usage
+
+LogDash has three interfaces over the same analysis.
 
 ```bash
-# Analisar diretório atual
-logdash analyze
-
-# Últimas 24 horas
-logdash analyze -path /var/log -last 24h
-
-# Com limites
-logdash analyze -path /var/log -max-files 10 -verbose
+logdash analyze -path /var/log          # report printed to the terminal
+logdash tui     -path /var/log          # interactive terminal UI
+logdash web     -path /var/log          # dashboard at http://localhost:8080
 ```
 
-## Features
+### Common options
 
-### 🔍 Discovery Inteligente
-- ✅ Busca recursiva automática
-- ✅ Filtros por padrão (*.log, *.txt, etc)
-- ✅ Exclusão de diretórios (.git, node_modules)
-- ✅ Controle de profundidade
+| Flag | Meaning | Default |
+|---|---|---|
+| `-path` | Root directory to search | current directory |
+| `-last` | Only entries from the last duration (`30m`, `24h`, `7d`) | all |
+| `-patterns` | File patterns, comma-separated | `*.log,*.txt` |
+| `-depth` | Maximum directory depth | `10` |
+| `-max-files` | Maximum number of files to process | no limit |
+| `-top` | Number of top messages to show (`analyze`) | `10` |
+| `-no-anomalies` | Disable anomaly detection | off |
+| `-port` | Port for the web dashboard (`web`) | `8080` |
 
-### 🎯 Parsing Automático
-- ✅ Detecta formatos automaticamente
-- ✅ Suporta Python logging, JSON, logs genéricos
-- ✅ Seleção inteligente de parser por confidence score
-- ✅ Fallback para formato desconhecido
-
-### 📊 Análise Avançada
-- ✅ Estatísticas por nível (Error, Warning, Info, etc)
-- ✅ Timeline temporal com buckets configuráveis
-- ✅ Top mensagens mais frequentes
-- ✅ Detecção de anomalias (error bursts, spikes)
-- ✅ Resumo automático
-
-### ⚡ Performance
-- ✅ Processa 100K+ entries em segundos
-- ✅ Processamento paralelo
-- ✅ Filtros configuráveis para otimização
-
-## Arquitetura
-
-```
-┌─────────────────────────────────────────────┐
-│              CLI Interface                   │
-└────────────────┬────────────────────────────┘
-                 │
-┌────────────────┴────────────────────────────┐
-│         Application Service                  │
-│  (Orquestra Discovery → Parser → Aggregator) │
-└────────────────┬────────────────────────────┘
-                 │
-    ┌────────────┼────────────┐
-    │            │            │
-┌───▼───┐   ┌───▼────┐   ┌──▼────────┐
-│Discovery│   │Parser  │   │Aggregator │
-└────────┘   └────────┘   └───────────┘
-```
-
-### Componentes
-
-- **Discovery**: Encontra arquivos de log no filesystem
-- **Parser**: Extrai LogEntry de diferentes formatos
-- **Aggregator**: Gera estatísticas, timeline e detecta anomalias  
-- **Service**: Orquestra tudo em pipeline end-to-end
-- **CLI**: Interface de linha de comando
-
-## Exemplos
-
-### Health Check Rápido
+### Examples
 
 ```bash
+# Quick health check of the last hour
 logdash analyze -path /var/log -last 1h -max-files 5
-```
 
-### Investigação Profunda
-
-```bash
+# Deeper investigation
 logdash analyze -path /app/logs -last 24h -verbose -top 20
+
+# Browse interactively
+logdash tui -path ./logs -last 7d
 ```
 
-### Análise Focada
+### TUI keys
+
+| Key | Action |
+|---|---|
+| `Tab` / `Shift+Tab` | Next / previous view |
+| `↑` `↓` or `k` `j` | Scroll |
+| `PgUp` `PgDn` | Page up / down |
+| `g` / `G` | Top / bottom |
+| `r` | Reload |
+| `?` | Help |
+| `q` | Quit |
+
+## What it does
+
+- **Discovery:** recursive search with pattern filters, depth control and automatic exclusion of directories such as `.git` and `node_modules`.
+- **Parsing:** each file is matched against the available parsers and the one with the highest confidence score wins. Python `logging` and generic timestamped logs are supported today, with a fallback for unknown formats.
+- **Aggregation:** counts per level, a timeline in configurable buckets, and the most frequent messages.
+- **Anomaly detection:** error bursts, spikes in the timeline, and repeated errors.
+
+## Architecture
+
+```
+        CLI  ·  TUI  ·  Web
+               │
+        Application service
+               │
+   ┌───────────┼───────────┐
+Discovery    Parser    Aggregator
+```
+
+The three interfaces share one service, which runs the pipeline Discovery → Parser → Aggregator. Each core package sits behind an interface, so parsers and outputs can be added without touching the rest. Details in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+```
+cmd/logdash/         # entry point and command parsing
+internal/core/       # discovery, parser, aggregator
+internal/service/    # pipeline orchestration
+internal/tui/        # terminal UI (Bubble Tea)
+internal/web/        # HTTP server and dashboard template
+```
+
+## Development
+
+The core was written test-first.
 
 ```bash
-logdash analyze -path /var/log -patterns '*.log' -depth 3
+go test ./...
+go test -cover ./...
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-- [x] Parser para logs genéricos
-- [x] Parser para Python logging
-- [x] Discovery recursivo com filtros
-- [x] Agregação e estatísticas
-- [x] Detecção de anomalias
-- [x] CLI funcional
-- [ ] Interface Web (htmx + Alpine.js)
-- [ ] Interface TUI (bubbletea)
-- [ ] Cache (Indexer) para performance
-- [ ] Mais parsers (Log4j, syslog, nginx)
-- [ ] Export para JSON/CSV
-- [ ] Watch mode em tempo real
+- [x] Discovery, generic and Python logging parsers, aggregation, anomaly detection
+- [x] Command-line report
+- [x] Terminal UI
+- [x] Web dashboard
+- [ ] More parsers: JSON lines, syslog, nginx, Log4j
+- [ ] Export to JSON / CSV
+- [ ] Watch mode
+- [ ] Index cache for large directories
 
-## Documentação
+## License
 
-- [CLI Guide](./cmd/logdash/README.md) - Guia completo da interface CLI
-- [Parser Guide](./docs/PARSER_GUIDE.md) - Como criar novos parsers
-- [Discovery Guide](./docs/DISCOVERY_GUIDE.md) - Sistema de descoberta
-- [Aggregator Guide](./docs/AGGREGATOR_GUIDE.md) - Análise e agregação
-- [Architecture](./docs/ARCHITECTURE.md) - Visão geral técnica
-
-## Contribuindo
-
-Contribuições são bem-vindas! Veja [CONTRIBUTING.md](CONTRIBUTING.md) para detalhes.
-
-### Desenvolvimento
-
-```bash
-# Rodar testes
-go test ./...
-
-# Rodar testes com cobertura
-go test -cover ./...
-
-# Build
-go build -o logdash ./cmd/logdash
-```
-
-## Licença
-
-MIT License - veja [LICENSE](LICENSE) para detalhes.
-
----
+[MIT](LICENSE)
